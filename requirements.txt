@@ -6,3 +6,5 @@ imagehash
 playwright
 requests
 opencv-python
+google-genai
+opencv-python
