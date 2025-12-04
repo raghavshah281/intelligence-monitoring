@@ -24,7 +24,7 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def load_image_from_drive(drive_id: str, tmp_dir: Path) -> tuple[np.ndarray, int, int, Path]:
+def load_image_from_drive(drive_id: str, tmp_dir: Path):
     """
     Download image from Drive and load via OpenCV.
     Returns (image_bgr, width, height, local_path).
@@ -42,8 +42,7 @@ def load_image_from_drive(drive_id: str, tmp_dir: Path) -> tuple[np.ndarray, int
 
 def compute_global_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
     """
-    Compute structural similarity index (SSIM) between two images.
-    They must be same size; we will resize img2 to match img1 if needed.
+    Compute SSIM between two images.
     """
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
@@ -64,10 +63,9 @@ def detect_diff_boxes(
     global_ssim: float,
     ssim_threshold: float = 0.98,
     min_area_ratio: float = 0.001,
-) -> list[tuple[int, int, int, int]]:
+):
     """
     Use OpenCV to detect bounding boxes of differences between two images.
-
     Returns list of (x, y, w, h) in full-image coordinates.
     """
     h1, w1 = img1.shape[:2]
@@ -80,19 +78,14 @@ def detect_diff_boxes(
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
     if global_ssim >= ssim_threshold:
-        # Too similar; nothing significant to detect
+        # Logically: "no significant diff"
         return []
 
-    # Absolute difference
     diff = cv2.absdiff(gray1, gray2)
-    # Optional blur to reduce noise
     diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
 
-    # Threshold: highlight pixels that changed
-    # You can tweak 25 if too sensitive / too strict
     _, thresh = cv2.threshold(diff_blur, 25, 255, cv2.THRESH_BINARY)
 
-    # Morphological operations to merge nearby regions
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     thresh = cv2.dilate(thresh, kernel, iterations=2)
     thresh = cv2.erode(thresh, kernel, iterations=1)
@@ -101,7 +94,7 @@ def detect_diff_boxes(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    boxes: list[tuple[int, int, int, int]] = []
+    boxes = []
     min_area = int(min_area_ratio * w1 * h1)
 
     for cnt in contours:
@@ -135,9 +128,8 @@ def main():
     print(f"Found {len(sites)} site(s) with snapshots.")
 
     now_iso = iso_now()
-
-    # Global SSIM threshold: above this = "no meaningful change"
     SSIM_THRESHOLD = 0.985
+    MAX_PAIRS_PER_SITE = 5  # keep each run fast
 
     for (site_name, url) in sites:
         print(f"\n[Diff] Processing site: {site_name} – {url}")
@@ -146,71 +138,99 @@ def main():
             print("  Not enough snapshots for diff (need at least 2). Skipping.")
             continue
 
-        for i in range(len(snapshots) - 1):
-            s1 = snapshots[i]
-            s2 = snapshots[i + 1]
-            sid1 = int(s1["id"])
-            sid2 = int(s2["id"])
+        pairs_processed = 0
 
-            if snapshot_pair_exists(conn, sid1, sid2):
-                # Already analyzed this pair in a previous run
-                continue
+        # Work from latest pairs backwards
+        indices = list(range(len(snapshots) - 1))
+        indices.reverse()
 
-            print(f"  Comparing snapshot {sid1} vs {sid2}...")
+        try:
+            for idx in indices:
+                if pairs_processed >= MAX_PAIRS_PER_SITE:
+                    print(f"  Reached MAX_PAIRS_PER_SITE={MAX_PAIRS_PER_SITE}, stopping for this site.")
+                    break
 
-            # 3) Download images from Drive
-            img1, w1, h1, _ = load_image_from_drive(s1["screenshot_drive_id"], tmp_dir)
-            img2, w2, h2, _ = load_image_from_drive(s2["screenshot_drive_id"], tmp_dir)
+                s1 = snapshots[idx]
+                s2 = snapshots[idx + 1]
+                sid1 = int(s1["id"])
+                sid2 = int(s2["id"])
 
-            # 4) Global SSIM
-            score = compute_global_ssim(img1, img2)
-            print(f"    Global SSIM = {score:.5f}")
+                if snapshot_pair_exists(conn, sid1, sid2):
+                    # Already done in previous run
+                    continue
 
-            changed = score < SSIM_THRESHOLD
+                print(f"  Comparing snapshot {sid1} vs {sid2}...")
+                pairs_processed += 1
 
-            # 5) Insert snapshot_pair
-            pair_id = insert_snapshot_pair(
-                conn,
-                site_name=site_name,
-                url=url,
-                snapshot_id_1=sid1,
-                snapshot_id_2=sid2,
-                compared_at=now_iso,
-                global_ssim=score,
-                changed=changed,
-            )
+                try:
+                    img1, w1, h1, _ = load_image_from_drive(
+                        s1["screenshot_drive_id"], tmp_dir
+                    )
+                    img2, w2, h2, _ = load_image_from_drive(
+                        s2["screenshot_drive_id"], tmp_dir
+                    )
+                except Exception as e:
+                    print(f"    [Error] Failed to download/load images for pair {sid1}-{sid2}: {e}")
+                    continue
 
-            if not changed:
-                print("    Marked as no significant change based on SSIM.")
-                continue
+                score = compute_global_ssim(img1, img2)
+                print(f"    Global SSIM = {score:.5f}")
 
-            # 6) Detect diff boxes with OpenCV
-            boxes = detect_diff_boxes(img1, img2, global_ssim=score)
-            print(f"    Found {len(boxes)} change region(s).")
+                changed = score < SSIM_THRESHOLD
 
-            for (x, y, w, h) in boxes:
-                insert_snapshot_diff(
+                pair_id = insert_snapshot_pair(
                     conn,
-                    snapshot_pair_id=pair_id,
-                    tile_index=0,  # we are not tiling yet; everything is tile_index=0
-                    x=x,
-                    y=y,
-                    w=w,
-                    h=h,
-                    img_width=w1,
-                    img_height=h1,
+                    site_name=site_name,
+                    url=url,
+                    snapshot_id_1=sid1,
+                    snapshot_id_2=sid2,
+                    compared_at=now_iso,
+                    global_ssim=score,
+                    changed=changed,
                 )
+
+                if not changed:
+                    print("    No significant change (SSIM above threshold). Recorded as unchanged pair.")
+                    continue
+
+                boxes = detect_diff_boxes(img1, img2, global_ssim=score)
+                print(f"    Found {len(boxes)} change region(s).")
+
+                if not boxes:
+                    print("    No localized diff boxes found; change is probably subtle or noisy.")
+
+                for (x, y, w, h) in boxes:
+                    insert_snapshot_diff(
+                        conn,
+                        snapshot_pair_id=pair_id,
+                        tile_index=0,
+                        x=x,
+                        y=y,
+                        w=w,
+                        h=h,
+                        img_width=w1,
+                        img_height=h1,
+                    )
+
+        except Exception as e:
+            # If *anything* unexpected happens for this site, log and move on.
+            print(f"[Diff] Unexpected error for site {site_name}: {e}")
+        finally:
+            # Always sync DB for this site, even if the job later gets cancelled.
+            print(f"[Diff] Finished site: {site_name}. Syncing DB to Drive...")
+            try:
+                upload_file(
+                    str(DB_LOCAL_PATH),
+                    file_id=gdrive_db_file_id,
+                    mime_type="application/x-sqlite3",
+                )
+                print("[Diff] DB synced for this site.")
+            except Exception as e:
+                print(f"[Diff] Failed to sync DB for site {site_name}: {e}")
 
     conn.close()
 
-    # 7) Upload updated DB
-    print("Syncing updated DB with diff data back to Drive...")
-    upload_file(
-        str(DB_LOCAL_PATH),
-        file_id=gdrive_db_file_id,
-        mime_type="application/x-sqlite3",
-    )
-    print("analyze_diffs run completed.")
+    print("analyze_diffs run completed (final DB already synced per site).")
 
 
 if __name__ == "__main__":
