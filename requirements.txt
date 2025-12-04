@@ -8,3 +8,5 @@ requests
 opencv-python
 google-genai
 opencv-python
+opencv-python
+scikit-image
