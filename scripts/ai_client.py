@@ -59,7 +59,7 @@ def describe_visual_changes_with_gemini(
         )
 
     response = client.models.generate_content(
-        model="gemini-3-pro",  # multimodal, good for image understanding
+        model="gemini-3-pro-preview",  # multimodal, good for image understanding
         contents=contents,
     )
 
