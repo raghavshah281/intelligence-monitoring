@@ -60,8 +60,6 @@ def capture_site(page, url: str, out_dir: Path, base_name: str) -> tuple[Path, P
 
 def main():
     gdrive_db_file_id = os.environ["GDRIVE_DB_FILE_ID"]
-    gdrive_screenshot_folder_id = os.environ["GDRIVE_SCREENSHOT_FOLDER_ID"]
-    gdrive_dom_folder_id = os.environ["GDRIVE_DOM_FOLDER_ID"]
 
     print("Starting capture_and_index run...")
     print("Downloading DB from Drive...")
@@ -104,16 +102,13 @@ def main():
             print(f"Capturing {site_name} – {url}")
             screenshot_path, dom_path, html = capture_site(page, url, out_dir, base_name)
 
-            # 3) Upload screenshot & DOM to Google Drive
-            # If folder IDs are wrong/inaccessible, upload_file() will fall back to root.
+            # 3) Upload screenshot & DOM to Google Drive (ROOT)
             screenshot_drive_id = upload_file(
                 str(screenshot_path),
-                folder_id=gdrive_screenshot_folder_id,
                 mime_type="image/png",
             )
             dom_drive_id = upload_file(
                 str(dom_path),
-                folder_id=gdrive_dom_folder_id,
                 mime_type="text/html",
             )
 
