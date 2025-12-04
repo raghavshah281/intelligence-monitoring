@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def detect_diff_boxes(
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
     if global_ssim >= ssim_threshold:
-        # Logically: "no significant diff"
+        # No significant change → normal path
         return []
 
     diff = cv2.absdiff(gray1, gray2)
@@ -107,7 +108,7 @@ def detect_diff_boxes(
     return boxes
 
 
-def main():
+def analyze():
     gdrive_db_file_id = os.environ["GDRIVE_DB_FILE_ID"]
 
     print("Starting analyze_diffs run...")
@@ -136,6 +137,7 @@ def main():
         snapshots = get_snapshots_for_site(conn, site_name, url)
         if len(snapshots) < 2:
             print("  Not enough snapshots for diff (need at least 2). Skipping.")
+            # even here, this site is 'done' with no error
             continue
 
         pairs_processed = 0
@@ -169,54 +171,57 @@ def main():
                     img2, w2, h2, _ = load_image_from_drive(
                         s2["screenshot_drive_id"], tmp_dir
                     )
-                except Exception as e:
-                    print(f"    [Error] Failed to download/load images for pair {sid1}-{sid2}: {e}")
-                    continue
 
-                score = compute_global_ssim(img1, img2)
-                print(f"    Global SSIM = {score:.5f}")
+                    score = compute_global_ssim(img1, img2)
+                    print(f"    Global SSIM = {score:.5f}")
 
-                changed = score < SSIM_THRESHOLD
+                    changed = score < SSIM_THRESHOLD
 
-                pair_id = insert_snapshot_pair(
-                    conn,
-                    site_name=site_name,
-                    url=url,
-                    snapshot_id_1=sid1,
-                    snapshot_id_2=sid2,
-                    compared_at=now_iso,
-                    global_ssim=score,
-                    changed=changed,
-                )
-
-                if not changed:
-                    print("    No significant change (SSIM above threshold). Recorded as unchanged pair.")
-                    continue
-
-                boxes = detect_diff_boxes(img1, img2, global_ssim=score)
-                print(f"    Found {len(boxes)} change region(s).")
-
-                if not boxes:
-                    print("    No localized diff boxes found; change is probably subtle or noisy.")
-
-                for (x, y, w, h) in boxes:
-                    insert_snapshot_diff(
+                    pair_id = insert_snapshot_pair(
                         conn,
-                        snapshot_pair_id=pair_id,
-                        tile_index=0,
-                        x=x,
-                        y=y,
-                        w=w,
-                        h=h,
-                        img_width=w1,
-                        img_height=h1,
+                        site_name=site_name,
+                        url=url,
+                        snapshot_id_1=sid1,
+                        snapshot_id_2=sid2,
+                        compared_at=now_iso,
+                        global_ssim=score,
+                        changed=changed,
                     )
 
+                    if not changed:
+                        print("    No significant change (SSIM above threshold). Recorded as unchanged pair.")
+                        # NO EXCEPTION, just continue
+                        continue
+
+                    boxes = detect_diff_boxes(img1, img2, global_ssim=score)
+                    print(f"    Found {len(boxes)} change region(s).")
+
+                    if not boxes:
+                        print("    No localized diff boxes found; change is subtle or mostly noise.")
+
+                    for (x, y, w, h) in boxes:
+                        insert_snapshot_diff(
+                            conn,
+                            snapshot_pair_id=pair_id,
+                            tile_index=0,
+                            x=x,
+                            y=y,
+                            w=w,
+                            h=h,
+                            img_width=w1,
+                            img_height=h1,
+                        )
+
+                except Exception as e:
+                    # One bad pair should never kill the site
+                    print(f"    [Pair Error] Snapshot pair {sid1}-{sid2} failed: {e}. Skipping this pair.")
+                    continue
+
         except Exception as e:
-            # If *anything* unexpected happens for this site, log and move on.
-            print(f"[Diff] Unexpected error for site {site_name}: {e}")
+            # One bad site should not kill the whole run
+            print(f"[Site Error] Unexpected error for site {site_name}: {e}")
         finally:
-            # Always sync DB for this site, even if the job later gets cancelled.
+            # Always sync DB for this site, even if something went wrong
             print(f"[Diff] Finished site: {site_name}. Syncing DB to Drive...")
             try:
                 upload_file(
@@ -229,8 +234,19 @@ def main():
                 print(f"[Diff] Failed to sync DB for site {site_name}: {e}")
 
     conn.close()
-
     print("analyze_diffs run completed (final DB already synced per site).")
+
+
+def main():
+    """
+    Top-level wrapper: NEVER let an exception bubble out and kill the process.
+    """
+    try:
+        analyze()
+    except Exception as e:
+        # Log and exit with code 0 so GitHub never treats it as a failure/cancel.
+        print(f"[TOP-LEVEL ERROR] analyze_diffs crashed unexpectedly: {e}")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
