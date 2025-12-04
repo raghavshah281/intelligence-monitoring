@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,15 +21,16 @@ def iso_now() -> str:
 
 
 def compute_hashes(image_path: Path):
+    """Compute perceptual hashes for an image."""
     img = Image.open(image_path)
     ph = imagehash.phash(img)
     ah = imagehash.average_hash(img)
     dh = imagehash.dhash(img)
-    return ph.__str__(), ah.__str__(), dh.__str__()
+    return str(ph), str(ah), str(dh)
 
 
 def compute_dom_hash(html: str) -> str:
-    # Simple SHA-256 over raw HTML; you can normalize more if you want
+    """Simple SHA-256 hash for DOM HTML."""
     return hashlib.sha256(html.encode("utf-8")).hexdigest()
 
 
@@ -38,10 +40,14 @@ def load_sites() -> list[dict]:
 
 
 def capture_site(page, url: str, out_dir: Path, base_name: str) -> tuple[Path, Path, str]:
+    """
+    Visit URL, capture full-page screenshot and DOM HTML to local files,
+    and return (screenshot_path, dom_path, html_string).
+    """
     page.goto(url, wait_until="networkidle")
-    # Increase device scale factor via viewport for nice quality
+    # Ensure viewport is set (context also has a default)
     page.set_viewport_size({"width": 1440, "height": 900})
-    # full-page screenshot
+
     screenshot_path = out_dir / f"{base_name}.png"
     page.screenshot(path=str(screenshot_path), full_page=True)
 
@@ -57,12 +63,22 @@ def main():
     gdrive_screenshot_folder_id = os.environ["GDRIVE_SCREENSHOT_FOLDER_ID"]
     gdrive_dom_folder_id = os.environ["GDRIVE_DOM_FOLDER_ID"]
 
-    # 1) Sync DB down from Drive
+    # 1) Download DB from Drive
+    print("Downloading DB from Drive...")
     download_file(gdrive_db_file_id, str(DB_LOCAL_PATH))
 
-    # 2) Init DB schema if first time
-    conn = get_connection(DB_LOCAL_PATH)
-    init_schema(conn)
+    # 2) Open or repair DB schema
+    try:
+        conn = get_connection(DB_LOCAL_PATH)
+        init_schema(conn)
+        print("DB opened and schema initialized.")
+    except sqlite3.DatabaseError as e:
+        print(f"Downloaded file is not a valid SQLite DB ({e}). Recreating fresh DB...")
+        if DB_LOCAL_PATH.exists():
+            DB_LOCAL_PATH.unlink()
+        conn = get_connection(DB_LOCAL_PATH)
+        init_schema(conn)
+        print("Fresh DB created and schema initialized.")
 
     sites = load_sites()
     run_ts = iso_now()
@@ -74,7 +90,7 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": 1440, "height": 900},
-            device_scale_factor=2,  # higher DPR for sharper text
+            device_scale_factor=2,  # higher DPR for sharper UI
         )
 
         for site in sites:
@@ -83,9 +99,10 @@ def main():
             url = site["url"]
 
             base_name = f"{site_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+            print(f"Capturing {site_name} – {url}")
             screenshot_path, dom_path, html = capture_site(page, url, out_dir, base_name)
 
-            # Upload screenshot & DOM to Drive
+            # 3) Upload screenshot & DOM to Google Drive
             screenshot_drive_id = upload_file(
                 str(screenshot_path),
                 folder_id=gdrive_screenshot_folder_id,
@@ -97,9 +114,11 @@ def main():
                 mime_type="text/html",
             )
 
+            # 4) Compute hashes
             phash, ahash, dhash = compute_hashes(screenshot_path)
             dom_hash = compute_dom_hash(html)
 
+            # 5) Insert into SQLite
             insert_snapshot(
                 conn,
                 {
@@ -121,8 +140,13 @@ def main():
 
     conn.close()
 
-    # 3) Sync DB back up to Drive
-    upload_file(str(DB_LOCAL_PATH), file_id=gdrive_db_file_id, mime_type="application/x-sqlite3")
+    # 6) Upload updated DB back to Drive
+    print("Syncing updated DB back to Drive...")
+    upload_file(
+        str(DB_LOCAL_PATH),
+        file_id=gdrive_db_file_id,
+        mime_type="application/x-sqlite3",
+    )
     print("DB synced back to Drive.")
 
 
