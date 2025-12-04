@@ -45,7 +45,6 @@ def capture_site(page, url: str, out_dir: Path, base_name: str) -> tuple[Path, P
     and return (screenshot_path, dom_path, html_string).
     """
     page.goto(url, wait_until="networkidle")
-    # Ensure viewport is set (context also has a default)
     page.set_viewport_size({"width": 1440, "height": 900})
 
     screenshot_path = out_dir / f"{base_name}.png"
@@ -60,11 +59,16 @@ def capture_site(page, url: str, out_dir: Path, base_name: str) -> tuple[Path, P
 
 def main():
     gdrive_db_file_id = os.environ["GDRIVE_DB_FILE_ID"]
+    screenshot_folder_id = os.environ["GDRIVE_SCREENSHOT_FOLDER_ID"]
+    dom_folder_id = os.environ["GDRIVE_DOM_FOLDER_ID"]
 
     print("Starting capture_and_index run...")
-    print("Downloading DB from Drive...")
+    print(f"[DEBUG] GDRIVE_DB_FILE_ID: {gdrive_db_file_id!r}")
+    print(f"[DEBUG] GDRIVE_SCREENSHOT_FOLDER_ID: {screenshot_folder_id!r}")
+    print(f"[DEBUG] GDRIVE_DOM_FOLDER_ID: {dom_folder_id!r}")
 
     # 1) Download DB from Drive
+    print("Downloading DB from Drive...")
     download_file(gdrive_db_file_id, str(DB_LOCAL_PATH))
 
     # 2) Open or repair DB schema
@@ -90,7 +94,7 @@ def main():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": 1440, "height": 900},
-            device_scale_factor=2,  # higher DPR for sharper UI
+            device_scale_factor=2,
         )
 
         for site in sites:
@@ -102,13 +106,15 @@ def main():
             print(f"Capturing {site_name} – {url}")
             screenshot_path, dom_path, html = capture_site(page, url, out_dir, base_name)
 
-            # 3) Upload screenshot & DOM to Google Drive (ROOT)
+            # 3) Upload screenshot & DOM to Google Drive in YOUR folders
             screenshot_drive_id = upload_file(
                 str(screenshot_path),
+                folder_id=screenshot_folder_id,
                 mime_type="image/png",
             )
             dom_drive_id = upload_file(
                 str(dom_path),
+                folder_id=dom_folder_id,
                 mime_type="text/html",
             )
 
