@@ -14,6 +14,7 @@ jobs:
       GDRIVE_DB_FILE_ID: ${{ secrets.GDRIVE_DB_FILE_ID }}
       CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
       CLICKUP_TASK_ID: ${{ secrets.CLICKUP_TASK_ID }}
+      CLICKUP_API_BASE_URL: ${{ secrets.CLICKUP_API_BASE_URL }}
 
     steps:
       - name: Checkout
