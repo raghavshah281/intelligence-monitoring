@@ -63,8 +63,10 @@ def main():
     gdrive_screenshot_folder_id = os.environ["GDRIVE_SCREENSHOT_FOLDER_ID"]
     gdrive_dom_folder_id = os.environ["GDRIVE_DOM_FOLDER_ID"]
 
-    # 1) Download DB from Drive
+    print("Starting capture_and_index run...")
     print("Downloading DB from Drive...")
+
+    # 1) Download DB from Drive
     download_file(gdrive_db_file_id, str(DB_LOCAL_PATH))
 
     # 2) Open or repair DB schema
@@ -103,6 +105,7 @@ def main():
             screenshot_path, dom_path, html = capture_site(page, url, out_dir, base_name)
 
             # 3) Upload screenshot & DOM to Google Drive
+            # If folder IDs are wrong/inaccessible, upload_file() will fall back to root.
             screenshot_drive_id = upload_file(
                 str(screenshot_path),
                 folder_id=gdrive_screenshot_folder_id,
@@ -113,6 +116,9 @@ def main():
                 folder_id=gdrive_dom_folder_id,
                 mime_type="text/html",
             )
+
+            print(f"Uploaded screenshot to Drive (id={screenshot_drive_id}).")
+            print(f"Uploaded DOM snapshot to Drive (id={dom_drive_id}).")
 
             # 4) Compute hashes
             phash, ahash, dhash = compute_hashes(screenshot_path)
@@ -148,6 +154,7 @@ def main():
         mime_type="application/x-sqlite3",
     )
     print("DB synced back to Drive.")
+    print("capture_and_index run completed.")
 
 
 if __name__ == "__main__":
