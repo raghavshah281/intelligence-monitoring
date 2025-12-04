@@ -15,6 +15,7 @@ jobs:
       CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
       CLICKUP_TASK_ID: ${{ secrets.CLICKUP_TASK_ID }}
       CLICKUP_API_BASE_URL: ${{ secrets.CLICKUP_API_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
     steps:
       - name: Checkout
