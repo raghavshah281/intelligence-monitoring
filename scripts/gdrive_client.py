@@ -34,8 +34,7 @@ def download_file(file_id: str, dest_path: str):
     done = False
     while not done:
         status, done = downloader.next_chunk()
-        # You can log progress here if desired:
-        # print(f"Download {int(status.progress() * 100)}%.")
+        # print(f"Download {int(status.progress() * 100)}%")  # optional
     fh.close()
 
 
@@ -48,9 +47,11 @@ def upload_file(
     """
     Upload a local file to Google Drive.
 
-    - If file_id is provided, update that existing file.
-    - Else, create a new file. If folder_id is provided, attempt to put it in that folder.
-      If the folder_id is invalid or not found (404), falls back to creating in root.
+    - If file_id is provided: update that existing file (used for SQLite DB).
+      If this fails, we raise an error: DB sync must not silently fail.
+    - If file_id is None: create a new file (used for screenshots/DOM).
+      If folder_id is invalid or inaccessible (404), we fall back to creating
+      the file in the root of the Drive instead of failing the whole run.
     """
     service = get_drive_service()
 
@@ -58,7 +59,7 @@ def upload_file(
         open(file_path, "rb"), mimetype=mime_type, resumable=True
     )
 
-    # Case 1: update existing file by ID (used for the SQLite DB)
+    # --- Case 1: update existing file (DB) ---
     if file_id:
         try:
             updated = (
@@ -68,11 +69,12 @@ def upload_file(
             )
             return updated["id"]
         except HttpError as e:
-            # For the DB file, if this fails, we WANT to know.
-            print(f"[Drive] Error updating file {file_id}: {e}")
+            # DB file is critical; if we can't update it, surface the error.
+            print(f"[Drive] Error updating file with ID={file_id}.")
+            print(f"[Drive] HTTP error: {e}")
             raise
 
-    # Case 2: create new file (used for screenshots/DOM)
+    # --- Case 2: create new file (screenshots / DOM snapshots) ---
     file_metadata: dict = {"name": os.path.basename(file_path)}
 
     if folder_id:
@@ -86,12 +88,13 @@ def upload_file(
         )
         return created["id"]
     except HttpError as e:
-        # If the folder_id is invalid (404), fall back to root
+        # If folder doesn't exist or isn't accessible, Drive returns 404.
         if folder_id and e.resp is not None and e.resp.status == 404:
             print(
-                f"[Drive] Folder ID {folder_id} not found or inaccessible. "
-                f"Creating file in root instead. Error: {e}"
+                f"[Drive] Folder ID {folder_id!r} not found or inaccessible. "
+                f"Falling back to creating file in root. Error: {e}"
             )
+            # Remove parents, retry in root
             file_metadata.pop("parents", None)
             created = (
                 service.files()
@@ -100,5 +103,6 @@ def upload_file(
             )
             return created["id"]
 
-        print(f"[Drive] Error creating file in Drive: {e}")
+        print("[Drive] Error creating file in Drive (no fallback possible).")
+        print(f"[Drive] HTTP error: {e}")
         raise
