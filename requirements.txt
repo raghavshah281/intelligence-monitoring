@@ -5,3 +5,4 @@ Pillow
 imagehash
 playwright
 requests
+opencv-python
