@@ -126,21 +126,26 @@ def analyze():
     tmp_dir.mkdir(exist_ok=True)
 
     sites = list(get_all_sites(conn))
-    print(f"Found {len(sites)} site(s) with snapshots.")
+    total_sites = len(sites)
+    print(f"Found {total_sites} site(s) with snapshots.")
 
     now_iso = iso_now()
     SSIM_THRESHOLD = 0.985
     MAX_PAIRS_PER_SITE = 5  # keep each run fast
 
-    for (site_name, url) in sites:
-        print(f"\n[Diff] Processing site: {site_name} – {url}")
+    # Track results for each site for final summary
+    site_results = []  # List of (site_name, pairs_processed, status)
+
+    for site_idx, (site_name, url) in enumerate(sites, 1):
+        print(f"\n[Diff] Processing site {site_idx}/{total_sites}: {site_name} – {url}")
         snapshots = get_snapshots_for_site(conn, site_name, url)
         if len(snapshots) < 2:
             print("  Not enough snapshots for diff (need at least 2). Skipping.")
-            # even here, this site is 'done' with no error
+            site_results.append((site_name, 0, "skipped (insufficient snapshots)"))
             continue
 
         pairs_processed = 0
+        site_error = None  # Track if site had an error
 
         # Work from latest pairs backwards
         indices = list(range(len(snapshots) - 1))
@@ -217,10 +222,24 @@ def analyze():
                     print(f"    [Pair Error] Snapshot pair {sid1}-{sid2} failed: {e}. Skipping this pair.")
                     continue
 
+            # Log when no new pairs were found to process
+            if pairs_processed == 0:
+                print(f"  No new pairs to analyze for {site_name} (all previously processed).")
+
         except Exception as e:
             # One bad site should not kill the whole run
+            site_error = str(e)
             print(f"[Site Error] Unexpected error for site {site_name}: {e}")
         finally:
+            # Record result for summary
+            if site_error:
+                status = f"error: {site_error}"
+            elif pairs_processed == 0:
+                status = "completed (no new pairs)"
+            else:
+                status = "completed"
+            site_results.append((site_name, pairs_processed, status))
+
             # Always sync DB for this site, even if something went wrong
             print(f"[Diff] Finished site: {site_name}. Syncing DB to Drive...")
             try:
@@ -234,6 +253,12 @@ def analyze():
                 print(f"[Diff] Failed to sync DB for site {site_name}: {e}")
 
     conn.close()
+
+    # Print final summary
+    print("\n=== Analyze Diffs Summary ===")
+    for name, count, status in site_results:
+        print(f"  {name}: {count} pair(s) processed, status: {status}")
+    print(f"Total: {len(site_results)} site(s) processed.")
     print("analyze_diffs run completed (final DB already synced per site).")
 
 
