@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import Iterable, Dict, Any
+from typing import Iterable, Dict, Any, Optional
 
 
 DB_PATH = Path("ab_tracker.db")
@@ -16,11 +16,11 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 def init_schema(conn: sqlite3.Connection):
     """
     Create tables if they do not exist.
-    This is safe to run on every startup.
+    Safe to run on every startup.
     """
     cur = conn.cursor()
 
-    # Existing table: one row per screenshot/DOM capture
+    # Core snapshots table: one row per capture
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS snapshots (
@@ -38,42 +38,18 @@ def init_schema(conn: sqlite3.Connection):
         """
     )
 
-    # NEW: comparisons between consecutive snapshots for a given page
+    # NEW: DOM features per snapshot (hero + CTA + sections + variant_key)
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS snapshot_pairs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            site_name TEXT NOT NULL,
-            url TEXT NOT NULL,
-            snapshot_id_1 INTEGER NOT NULL,
-            snapshot_id_2 INTEGER NOT NULL,
-            compared_at TEXT NOT NULL,
-            global_ssim REAL,
-            changed INTEGER NOT NULL DEFAULT 0,
-            UNIQUE (snapshot_id_1, snapshot_id_2),
-            FOREIGN KEY(snapshot_id_1) REFERENCES snapshots(id),
-            FOREIGN KEY(snapshot_id_2) REFERENCES snapshots(id)
-        );
-        """
-    )
-
-    # NEW: bounding boxes of changed regions between a pair of snapshots
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS snapshot_diffs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            snapshot_pair_id INTEGER NOT NULL,
-            tile_index INTEGER NOT NULL DEFAULT 0,
-            x INTEGER NOT NULL,
-            y INTEGER NOT NULL,
-            w INTEGER NOT NULL,
-            h INTEGER NOT NULL,
-            area INTEGER NOT NULL,
-            norm_x REAL NOT NULL,
-            norm_y REAL NOT NULL,
-            norm_w REAL NOT NULL,
-            norm_h REAL NOT NULL,
-            FOREIGN KEY(snapshot_pair_id) REFERENCES snapshot_pairs(id)
+        CREATE TABLE IF NOT EXISTS snapshot_dom_features (
+            snapshot_id INTEGER PRIMARY KEY,
+            hero_heading TEXT,
+            hero_subheading TEXT,
+            hero_cta_text TEXT,
+            hero_cta_href TEXT,
+            main_sections_json TEXT,
+            variant_key TEXT,
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id)
         );
         """
     )
@@ -101,6 +77,9 @@ def insert_snapshot(conn: sqlite3.Connection, data: Dict[str, Any]):
 
 
 def get_weekly_snapshots(conn: sqlite3.Connection, since_iso: str) -> Iterable[sqlite3.Row]:
+    """
+    Get all snapshots captured since the given ISO timestamp.
+    """
     cur = conn.cursor()
     cur.execute(
         """
@@ -114,145 +93,60 @@ def get_weekly_snapshots(conn: sqlite3.Connection, since_iso: str) -> Iterable[s
     return cur.fetchall()
 
 
-# ---- Helpers for OpenCV diff analysis ----
+# ---- DOM feature helpers ----
 
 
-def get_all_sites(conn: sqlite3.Connection) -> Iterable[tuple[str, str]]:
-    """
-    Return distinct (site_name, url) pairs that have at least one snapshot.
-    """
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT DISTINCT site_name, url
-        FROM snapshots
-        ORDER BY site_name, url
-        """
-    )
-    return [(row[0], row[1]) for row in cur.fetchall()]
-
-
-def get_snapshots_for_site(conn: sqlite3.Connection, site_name: str, url: str) -> list[sqlite3.Row]:
-    """
-    Return all snapshots for a given site+url ordered by time.
-    """
+def get_dom_features(conn: sqlite3.Connection, snapshot_id: int) -> Optional[sqlite3.Row]:
     cur = conn.cursor()
     cur.execute(
         """
         SELECT *
-        FROM snapshots
-        WHERE site_name = ? AND url = ?
-        ORDER BY captured_at
+        FROM snapshot_dom_features
+        WHERE snapshot_id = ?
         """,
-        (site_name, url),
+        (snapshot_id,),
     )
-    return cur.fetchall()
+    return cur.fetchone()
 
 
-def snapshot_pair_exists(conn: sqlite3.Connection, sid1: int, sid2: int) -> bool:
-    """
-    Check if we already analyzed this pair of snapshots.
-    """
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT 1
-        FROM snapshot_pairs
-        WHERE snapshot_id_1 = ? AND snapshot_id_2 = ?
-        """,
-        (sid1, sid2),
-    )
-    return cur.fetchone() is not None
-
-
-def insert_snapshot_pair(
+def upsert_dom_features(
     conn: sqlite3.Connection,
-    site_name: str,
-    url: str,
-    snapshot_id_1: int,
-    snapshot_id_2: int,
-    compared_at: str,
-    global_ssim: float,
-    changed: bool,
-) -> int:
-    """
-    Insert a row into snapshot_pairs and return its id.
-    """
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT OR IGNORE INTO snapshot_pairs (
-            site_name, url, snapshot_id_1, snapshot_id_2,
-            compared_at, global_ssim, changed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            site_name,
-            url,
-            snapshot_id_1,
-            snapshot_id_2,
-            compared_at,
-            float(global_ssim),
-            1 if changed else 0,
-        ),
-    )
-    conn.commit()
-
-    # Fetch id
-    cur.execute(
-        """
-        SELECT id FROM snapshot_pairs
-        WHERE snapshot_id_1 = ? AND snapshot_id_2 = ?
-        """,
-        (snapshot_id_1, snapshot_id_2),
-    )
-    row = cur.fetchone()
-    return int(row["id"]) if row else -1
-
-
-def insert_snapshot_diff(
-    conn: sqlite3.Connection,
-    snapshot_pair_id: int,
-    tile_index: int,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    img_width: int,
-    img_height: int,
+    snapshot_id: int,
+    hero_heading: str,
+    hero_subheading: str,
+    hero_cta_text: str,
+    hero_cta_href: str,
+    main_sections_json: str,
+    variant_key: str | None,
 ):
-    """
-    Insert one bounding box of change for a snapshot pair.
-    """
-    area = w * h
-    norm_x = x / float(img_width)
-    norm_y = y / float(img_height)
-    norm_w = w / float(img_width)
-    norm_h = h / float(img_height)
-
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO snapshot_diffs (
-            snapshot_pair_id,
-            tile_index,
-            x, y, w, h,
-            area,
-            norm_x, norm_y, norm_w, norm_h
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO snapshot_dom_features (
+            snapshot_id,
+            hero_heading,
+            hero_subheading,
+            hero_cta_text,
+            hero_cta_href,
+            main_sections_json,
+            variant_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(snapshot_id) DO UPDATE SET
+            hero_heading = excluded.hero_heading,
+            hero_subheading = excluded.hero_subheading,
+            hero_cta_text = excluded.hero_cta_text,
+            hero_cta_href = excluded.hero_cta_href,
+            main_sections_json = excluded.main_sections_json,
+            variant_key = excluded.variant_key;
         """,
         (
-            snapshot_pair_id,
-            tile_index,
-            x,
-            y,
-            w,
-            h,
-            area,
-            norm_x,
-            norm_y,
-            norm_w,
-            norm_h,
+            snapshot_id,
+            hero_heading,
+            hero_subheading,
+            hero_cta_text,
+            hero_cta_href,
+            main_sections_json,
+            variant_key,
         ),
     )
     conn.commit()
