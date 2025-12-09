@@ -10,3 +10,6 @@ google-genai
 opencv-python
 opencv-python
 scikit-image
+beautifulsoup4
+lxml
+google-genai
