@@ -6,5 +6,41 @@
   {
     "name": "Monday Home",
     "url": "https://monday.com/"
+  },
+  {
+    "name": "Asana Home",
+    "url": "https://asana.com/"
+  },
+  {
+    "name": "Jira Home",
+    "url": "https://www.atlassian.com/software/jira"
+  },
+  {
+    "name": "Trello Home",
+    "url": "https://trello.com/"
+  },
+  {
+    "name": "Slack Home",
+    "url": "https://slack.com/"
+  },
+  {
+    "name": "MS Project Home",
+    "url": "https://www.microsoft.com/en-us/microsoft-365/planner/project-management"
+  },
+  {
+    "name": "Smartsheet Home",
+    "url": "https://www.smartsheet.com/"
+  },
+  {
+    "name": "Airtable Home",
+    "url": "https://www.airtable.com/"
+  },
+  {
+    "name": "Basecamp Home",
+    "url": "https://basecamp.com/"
+  },
+  {
+    "name": "Todoist Home",
+    "url": "https://www.todoist.com/"
   }
 ]
