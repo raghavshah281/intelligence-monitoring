@@ -1,7 +1,7 @@
 [
   {
     "name": "Notion Home",
-    "url": "https://www.notion.com/product"
+    "url": "https://www.notion.com/"
   },
   {
     "name": "Monday Home",
@@ -42,5 +42,37 @@
   {
     "name": "Todoist Home",
     "url": "https://www.todoist.com/"
+  },
+  {
+    "name": "Taskade Home",
+    "url": "https://www.taskade.com/"
+  },
+  {
+    "name": "Linear Home",
+    "url": "https://linear.app/"
+  },
+  {
+    "name": "Hive Home",
+    "url": "https://hive.com/"
+  },
+  {
+    "name": "Motion Home",
+    "url": "https://usemotion.com/"
+  },
+  {
+    "name": "Glean Home",
+    "url": "https://www.glean.com/"
+  },
+  {
+    "name": "Relevance AI Home",
+    "url": "https://relevanceai.com/"
+  },
+  {
+    "name": "Granola Home",
+    "url": "https://www.granola.ai/"
+  },
+  {
+    "name": "ClickUp Test",
+    "url": "https://clickup.com/testing-for-monitoring"
   }
 ]
